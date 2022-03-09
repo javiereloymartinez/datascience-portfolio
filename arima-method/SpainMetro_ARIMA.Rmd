@@ -1,0 +1,181 @@
+---
+title: 'ARIMA forecasting - Spain metro users'
+author: "Javier Eloy Martinez Ramos"
+date: "3/3/2022"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+library(readxl)
+library(lubridate)
+library(ggplot2)
+library(dplyr)
+library(zoo)
+library(forecast)
+library(kableExtra)
+library(tseries)
+```
+
+## Introduction
+
+This dataset was downloaded from the spanish National Institute of Statistics
+(INE) and it contains the quantities of metro users in Spain, from january 2011
+to december 2019.
+
+```{r include=FALSE}
+tabla <- read_excel("metroEspana.xlsx")
+
+datos <- tabla[8:115,]
+colnames(datos)[2] <- "Viajeros"
+
+viajeros <- ts(datos[, 2], start = c(2011, 1), frequency = 12)
+```
+
+## Graphic representation and seasonal decomposition
+
+```{r echo=TRUE}
+autoplot(viajeros) + 
+  ggtitle("Metro travelers in Spain") + 
+  xlab("Date") + ylab("Number of travelers")
+```
+
+Here we can see that the data doesn't move too much, this can mean that our 
+serie is stationary.
+
+```{r echo=TRUE}
+viajeros_Comp <- decompose(viajeros, type = c("multiplicative"))
+
+autoplot(viajeros_Comp, ts.colour = "blue")
+```
+
+Here we can see that the trend does move, and we clearly have seasonality.
+
+Then we represent the serie with trend and the seasonally adjusted serie:
+
+```{r echo=TRUE}
+autoplot(viajeros, series = "Data") +
+  autolayer(trendcycle(viajeros_Comp), series = "Trend") +
+  autolayer(seasadj(viajeros_Comp), series = "Seasonally adjusted") +
+  xlab("Date") + ylab("Number of travelers") +
+  ggtitle("Metro travelers in Spain") +
+  scale_colour_manual(
+    values = c("#736F4E", "#4C061D", "#D17A22"),
+    breaks = c("Data", "Seasonally adjusted", "Trend")
+    )
+```
+
+Then we see the seasonal representation:
+
+```{r echo=TRUE}
+seasonplot <- ggseasonplot(viajeros, year.labels = TRUE, year.labels.left = TRUE) +
+  ylab("Number of travelers") + xlab("Date") +
+  ggtitle("Seasonal plot: Metro travelers in Spain")
+
+seasonplot$labels$group <- "Year"
+seasonplot$labels$colour <- "Year"
+
+seasonplot
+```
+
+There are similarities between years in terms of shape, but not too evident.
+
+## Dataset partition
+
+In order to check the accuracy of the forecast methods we are partitioning the
+dataset to compare forecast and actual events.
+
+```{r echo=TRUE}
+# We leave out the data corresponding to the last 12 months.
+
+reservados <- 12
+
+viajeros_mod <- viajeros[1:(nrow(viajeros) - reservados),]
+viajeros_test <- viajeros[(nrow(viajeros) - reservados):(nrow(viajeros)),]
+
+viajeros_mod <- ts(viajeros_mod, start = c(2011, 1), frequency = 12)
+```
+
+## Search for the right time series behaviour model
+
+We chose the Holt-Winters multiplicative model since it's better suited for 
+seasonal series.
+
+```{r echo=TRUE}
+fit1 <- hw(viajeros_mod, h = reservados, seasonal = "multiplicative", level = c(80, 95))
+
+autoplot(fit1) +
+  ggtitle("Holt-Winters method forecast") +
+  ylab("Number of travelers") + xlab("Time")
+  
+autoplot(viajeros) +
+  ggtitle("Actual data") +
+  ylab("Number of travelers") + xlab("Time")
+```
+
+Then we are going to try to obtain a better forecast using ARIMA models.
+
+## Correlogram representation
+
+First, we are going to adjust the right model while also checking that its 
+residuals are not correlated.
+
+```{r echo=TRUE}
+# We make the Dickey-Fuller test to see if we in fact have a seasonal serie:
+adf.test(viajeros_mod, alternative = "stationary")
+```
+
+The Dickey Fuller test tells us that the serie we have is seasonal (the P-value 
+is smaller than 0.05), so we don't need to adjust the serie. (0 differences)
+
+```{r echo=TRUE}
+# ARIMA: (Autoregresivo, diferencias, medias móviles)
+
+# Moving averages:
+ggAcf(viajeros) + ggtitle("Moving averages")
+# Autoregressives:
+ggPacf(viajeros_mod) + ggtitle("Autoregressives")
+```
+
+We can see that we have 1 autoregressive and 1 moving average. This means our 
+ARIMA model is (1, 0, 1)(1, 0, 0)[12].
+
+```{r echo=TRUE}
+modelo <- arima(viajeros_mod, order = c(1, 0, 1), seasonal = c(1, 0, 0))
+modelo
+checkresiduals(modelo)
+```
+
+The P-value of the Ljung-Box test is bigger than 0.05, and this means that the
+model is well-adjusted.
+
+Also, we can see in the residuals graphic that we have a pattern that is similar 
+to white noise, this means we have no correlation between residuals.
+
+## Diagnosis:
+
+```{r echo=TRUE}
+error = residuals(modelo)
+# We check that the average of the error is near zero:
+autoplot(error)
+```
+
+Graphically, the average has the appearance of being zero.
+
+## Forecasting with ARIMA:
+
+```{r echo=TRUE}
+pronostico <- forecast(modelo, h = reservados)
+pronostico
+autoplot(pronostico)
+autoplot(viajeros)
+```
+
+## Conclusion:
+
+Through the ARIMA model, we have forecasted a similar pattern to the actual 
+data, and even if the amplitude of the variations is not exact, the waveshape 
+and frequency are very similar, and the actual data is between the marked error
+margins.
